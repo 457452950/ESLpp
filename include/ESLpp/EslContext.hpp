@@ -3,6 +3,8 @@
 #define ESLPP__ESL_CONTEXT_HPP
 
 #include <cassert>
+#include <cstdarg>
+
 #include <sstream>
 #include <functional>
 #include <memory>
@@ -376,6 +378,24 @@ public:
     }
 
 private:
+    void Log(LogLevel level, const std::string& tag, const char* fmt, ...)
+    {
+        if (!log_callback_)
+        {
+            return;
+        }
+
+        char buffer[2048] = {};
+
+        va_list args;
+        va_start(args, fmt);
+        size_t len = std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+        va_end(args);
+
+        log_callback_(this, level, tag, {buffer, len});
+    }
+
+private:
     OnLoggingCallback on_logging_callback_{};
     OnLoggedCallback  on_logged_callback_{};
     OnEventCallback   on_event_callback_{};
@@ -578,6 +598,7 @@ private:
     {
         if (receive_data_size_ == 0)
         {
+            Log(LogLevel::Debug, "parse", "parse headers, need more data.");
             return;
         }
 
@@ -632,8 +653,7 @@ private:
         auto len = CheckHeaderOverPosition();
         if (len == std::string::npos)
         {
-            if (log_callback_)
-                log_callback_(this, LogLevel::Debug, "parse", "parse headers, need more data.");
+            Log(LogLevel::Debug, "parse", "parse headers, need more data.");
             return false;
         }
 
@@ -654,9 +674,9 @@ private:
             }
             else
             {
-                if (log_callback_)
-                    log_callback_(this, LogLevel::Warn, "parse",
-                                  "header " + kv.first + " already exists, " + it->second + " -> " + kv.second);
+                Log(LogLevel::Warn, "parse",
+                    "header %s already exists, %s -> %s",
+                    kv.first.c_str(), it->second.c_str(), kv.second.c_str());
                 it->second = kv.second;
             }
         }
@@ -681,16 +701,14 @@ private:
             len          = std::stoull(len_str, &index);
             if (index != len_str.size())
             {
-                if (log_callback_)
-                    log_callback_(this, LogLevel::Error, "parse", "parse " + len_str + " to int failed.");
+                Log(LogLevel::Error, "parse", "parse %s -> %d to int failed.", len_str.c_str(), len);
                 on_error_callback_(this, Error::ParseError);
                 return false;
             }
         }
         catch (std::exception& e)
         {
-            if (log_callback_)
-                log_callback_(this, LogLevel::Error, "parse", "parse " + len_str + " to int failed.");
+            Log(LogLevel::Error, "parse", "parse %s to int failed.");
             on_error_callback_(this, Error::ParseError);
             return false;
         }
@@ -698,10 +716,7 @@ private:
         if (len > receive_data_size_)
         {
             // need more data
-            if (log_callback_)
-            {
-                log_callback_(this, LogLevel::Debug, "parse", "parse headers, need more data.");
-            }
+            Log(LogLevel::Debug, "parse", "parse headers, need more data.");
             parse_header_ = false;
             return false;
         }
@@ -719,8 +734,7 @@ private:
         if (p == data + len)
         {
             // not found
-            if (log_callback_)
-                log_callback_(this, LogLevel::Error, "parse", std::string(data, len) + " not found ':'");
+            Log(LogLevel::Error, "parse", "%s not found ':'", std::string(data, len).c_str());
             on_error_callback_(this, Error::ParseError);
             return false;
         }
@@ -732,8 +746,8 @@ private:
         if (pp.first.empty() || pp.second.empty())
         {
             // not found
-            if (log_callback_)
-                log_callback_(this, LogLevel::Error, "parse", "key " + pp.first + " or value " + pp.second + " empty");
+            Log(LogLevel::Error, "parse", "key %s or value %s empty", pp.first.c_str(),
+                pp.second.c_str());
             on_error_callback_(this, Error::ParseError);
             return false;
         }
