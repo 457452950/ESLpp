@@ -1,7 +1,7 @@
 ﻿cmake_minimum_required(VERSION 3.16)
 project(test_eslpp)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 11)
 
 add_executable(
         ${PROJECT_NAME}
@@ -12,3 +12,14 @@ target_include_directories(
         ${PROJECT_NAME}
         PRIVATE "../include/"
 )
+if (WIN32)
+    target_compile_options(
+            ${PROJECT_NAME}
+            PRIVATE -Wall
+    )
+else ()
+    target_compile_options(
+            ${PROJECT_NAME}
+            PRIVATE -Wall -Werror
+    )
+endif ()
