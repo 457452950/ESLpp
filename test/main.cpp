@@ -65,14 +65,14 @@ void test_events()
     using namespace std;
     using namespace eslpp;
     {
-        SubscribeEventHelper param(SubscribeEventHelper::JSON);
+        SubscribeEventHelper param;
         param.Event("all");
         cout << param.GetEslCommand() << endl;
         assert(param.GetEslCommand() == "event JSON all");
     }
     {
         //event plain CHANNEL_CREATE CHANNEL_DESTROY CUSTOM conference::maintenance sofia::register sofia::expire
-        SubscribeEventHelper param(SubscribeEventHelper::PLAIN);
+        SubscribeEventHelper param;
         param.Events(std::set<std::string>{"CHANNEL_CREATE", "CHANNEL_DESTROY"});
         param.CustomEvents(std::unordered_set<std::string>{
                                "conference::maintenance", "sofia::register", "sofia::expire"
@@ -81,7 +81,7 @@ void test_events()
         cout << param.GetEslCommand() << endl;
     }
     {
-        SubscribeEventHelper param(SubscribeEventHelper::PLAIN);
+        SubscribeEventHelper param;
         param.Event("DTMF");
         cout << param.GetEslCommand() << endl;
         assert(param.GetEslCommand() == "event PLAIN DTMF");
@@ -109,10 +109,10 @@ void test_parse_event()
         printf("[%s]:[%s]\n", tag.c_str(), message.c_str());
     };
 
+    EslContext context;
+    context.SetOnEventCallback(dump_event_cb);
+    context.SetLogHandler(log_cb);
     {
-        EslContext context;
-        context.SetOnEventCallback(dump_event_cb);
-        context.SetLogHandler(log_cb);
         static char data[] = "Speech-Type: detected-speech\n"
                 "Event-Name: DETECTED_SPEECH\n"
                 "Core-UUID: aac0f73e-b822-e54c-a02a-06a839ca3e5a\n"
@@ -146,9 +146,6 @@ void test_parse_event()
         context.Feed(reinterpret_cast<const uint8_t*>(data), sizeof(data) - 1);
     }
     {
-        EslContext context;
-        context.SetOnEventCallback(dump_event_cb);
-        context.SetLogHandler(log_cb);
         static char data[] =
                 "Job-UUID: 7f4db78a-17d7-11dd-b7a0-db4edd065621\n"
                 "Job-Command: originate\n"

@@ -16,6 +16,14 @@
 #include <utility>
 
 #define ESL_EVENT_HEADER_CONTENT_LENGTH "content-length"
+#define ESL_EVENT_HEADER_CONTENT_TYPE   "content-type"
+
+#define ESL_EVENT_CONTENT_TYPE_AUTH             "auth/request"
+#define ESL_EVENT_CONTENT_TYPE_COMMAND_REPLY    "command/reply"
+#define ESL_EVENT_CONTENT_TYPE_API_RESPONSE     "api/response"
+#define ESL_EVENT_CONTENT_TYPE_CONTENT_TEXT     "text/"
+#define ESL_EVENT_CONTENT_TYPE_DISCONNECT       "text/disconnect-notice"
+
 
 namespace eslpp
 {
@@ -123,6 +131,12 @@ struct EslEvent
 
     HeadersType headers;
     std::string body;
+
+    static std::shared_ptr<EslEvent> Parse(const char* data, size_t len)
+    {
+        // todo:
+        return nullptr;
+    }
 };
 
 class Context
@@ -211,6 +225,7 @@ protected:
 enum class Error
 {
     ParseError,
+    EventError,
 };
 
 enum class LogLevel
@@ -226,35 +241,8 @@ enum class LogLevel
 struct SubscribeEventHelper
 {
 public:
-    enum EventType
+    explicit SubscribeEventHelper()
     {
-        PLAIN,
-        XML,
-        JSON
-    };
-
-    static const char* to_string(EventType type)
-    {
-        switch (type)
-        {
-        case PLAIN:
-            return "PLAIN";
-        case XML:
-            return "XML";
-        case JSON:
-            return "JSON";
-        }
-        return "";
-    }
-
-    explicit SubscribeEventHelper(EventType type) : type_(type)
-    {
-    }
-
-    SubscribeEventHelper& SetEventType(EventType type)
-    {
-        type_ = type;
-        return *this;
     }
 
     SubscribeEventHelper& Event(const std::string& ev)
@@ -292,7 +280,7 @@ public:
     std::string GetEslCommand() const
     {
         std::stringstream ss;
-        ss << "event " << to_string(type_);
+        ss << "event PLAIN";
         for (auto&& it : events_)
         {
             ss << " " << it;
@@ -309,7 +297,6 @@ public:
     }
 
 private:
-    EventType                       type_{PLAIN};
     std::unordered_set<std::string> events_;
     std::unordered_set<std::string> custom_events_;
 };
@@ -336,7 +323,7 @@ public:
         on_logging_callback_ = std::move(_logging_callback);
     }
 
-    using OnLoggedCallback = std::function<void(EslContext*)>;
+    using OnLoggedCallback = std::function<void(EslContext*, bool success)>;
 
     void SetOnLoggedCallback(OnLoggedCallback&& _on_logged_callback)
     {
@@ -363,6 +350,13 @@ public:
     void SetLogHandler(LogCallback _log_callback)
     {
         log_callback_ = std::move(_log_callback);
+    }
+
+    using DisconnectCallback = std::function<void(EslContext*)>;
+
+    void SetDisconnectCallback(DisconnectCallback&& _disconnect_callback)
+    {
+        this->disconnect_callback_ = std::move(_disconnect_callback);
     }
 
     void Feed(const uint8_t* data, size_t len) override
@@ -396,61 +390,85 @@ private:
     }
 
 private:
-    OnLoggingCallback on_logging_callback_{};
-    OnLoggedCallback  on_logged_callback_{};
-    OnEventCallback   on_event_callback_{};
-    OnErrorCallback   on_error_callback_{};
-    LogCallback       log_callback_{};
+    OnLoggingCallback  on_logging_callback_{};
+    OnLoggedCallback   on_logged_callback_{};
+    OnEventCallback    on_event_callback_{};
+    OnErrorCallback    on_error_callback_{};
+    LogCallback        log_callback_{};
+    DisconnectCallback disconnect_callback_{};
 
 private:
     struct ApiCallbackImpl
     {
-        OnEventCallback on_callback_{};
-        OnEventCallback on_bg_job_callback_{};
+        enum Type
+        {
+            Command,
+            Api,
+            BgApi,
+        } type_;
+
+        explicit ApiCallbackImpl(Type type) : type_(type)
+        {
+        }
+
+        OnEventCallback on_ok_{};
+        OnEventCallback on_fail_{};
+        OnEventCallback on_bg_job_{};
     };
 
 public:
-    struct ApiCallback
+    struct Callback
     {
     public:
-        explicit ApiCallback(std::function<void()>&& _private_cb, ApiCallbackImpl* _on_event_callback) :
+        explicit Callback(std::function<void()>&& _private_cb, ApiCallbackImpl* _on_event_callback) :
             private_cb_(std::move(_private_cb)), api_callback_(_on_event_callback)
         {
         }
 
+        using Type = ApiCallbackImpl::Type;
+
         // noncopyable
-        ApiCallback(const ApiCallback&)            = delete;
-        ApiCallback& operator=(const ApiCallback&) = delete;
+        Callback(const Callback&)            = delete;
+        Callback& operator=(const Callback&) = delete;
 
         // moveable
-        ApiCallback(ApiCallback&& other) noexcept
+        Callback(Callback&& other) noexcept
         {
             std::swap(other.private_cb_, private_cb_);
-            std::swap(other.api_callback_, api_callback_);
+
+            api_callback_       = other.api_callback_;
+            other.api_callback_ = nullptr;
         }
 
-        ApiCallback& operator=(ApiCallback&& other) noexcept
+        Callback& operator=(Callback&& other) noexcept
         {
             std::swap(other.private_cb_, private_cb_);
             std::swap(other.api_callback_, api_callback_);
             return *this;
         }
 
-        ~ApiCallback()
+        ~Callback()
         {
             if (private_cb_)
                 private_cb_();
         }
 
-        ApiCallback& OnCallback(OnEventCallback&& _on_event_callback)
+        Callback& OnSuccess(OnEventCallback&& _on_event_callback)
         {
-            api_callback_->on_callback_ = std::move(_on_event_callback);
+            api_callback_->on_ok_ = std::move(_on_event_callback);
             return *this;
         }
 
-        void OnBgJobCallback(OnEventCallback&& _on_event_callback)
+        Callback& OnFail(OnEventCallback&& _on_event_callback)
         {
-            api_callback_->on_bg_job_callback_ = std::move(_on_event_callback);
+            api_callback_->on_fail_ = std::move(_on_event_callback);
+            return *this;
+        }
+
+        Callback& OnBgJob(OnEventCallback&& _on_event_callback)
+        {
+            api_callback_->on_bg_job_ = std::move(_on_event_callback);
+            return *this;
         }
 
     private:
@@ -458,13 +476,13 @@ public:
         ApiCallbackImpl*      api_callback_{nullptr};
     };
 
-    ApiCallback Api(const std::string& cmd)
+    Callback Api(const std::string& cmd)
     {
         assert(!cmd.empty());
-        return Send("api " + cmd);
+        return Send("api " + cmd, Callback::Type::BgApi);
     }
 
-    ApiCallback BgApi(const std::string& cmd, const std::string& job_uuid = "")
+    Callback BgApi(const std::string& cmd, const std::string& job_uuid = "")
     {
         assert(!cmd.empty());
         auto _cmd = "bgapi " + cmd;
@@ -473,32 +491,45 @@ public:
             _cmd += ("\n"
                      "Job-UUID: " + job_uuid);
         }
-        return Send(_cmd);
+        return std::move(Send(_cmd, Callback::Type::Api));
     }
 
-    ApiCallback Send(const std::string& cmd)
+    Callback Send(const std::string& cmd, Callback::Type type)
     {
         assert(!cmd.empty());
         static std::string cmd_suffix = "\n\n";
         std::string        _cmd       = cmd;
 
-        // check is end of "\n\n"
-        auto ok = std::equal(_cmd.rbegin(), _cmd.rend(), cmd_suffix.begin());
-        if (!ok)
+        // check end
+        if (cmd.compare(cmd.size() - 2, 2, "\n\n") == 0)
+        {
+            // end with "\n\n"
+        }
+        else if (cmd.compare(cmd.size() - 1, 1, "\n") == 0)
+        {
+            _cmd += "\n";
+        }
+        else
         {
             _cmd += "\n\n";
         }
 
         // insert into api queue
         ApiInfo entry{
-            _cmd, std::make_shared<ApiCallbackImpl>()
+            _cmd, std::make_shared<ApiCallbackImpl>(type)
         };
 
         this->api_queue_.push(entry);
 
-        return ApiCallback{[this] { this->RealApi(); }, entry.api_callback.get()};
+        return Callback{[this] { this->RealApi(); }, entry.api_callback.get()};
     }
 
+    Callback SubscribeEvents(const SubscribeEventHelper& param)
+    {
+        return this->Send(param.GetEslCommand(), Callback::Type::Command);
+    }
+
+    // send message
     template <typename T>
     void SendMsg(const std::string& uuid, T&& headers, const std::string& body = "")
     {
@@ -565,14 +596,14 @@ public:
         this->SendMsg(uuid, params);
     }
 
-    void SubscribeEvents(const SubscribeEventHelper& param)
-    {
-        this->Send(param.GetEslCommand());
-    }
-
     void Exit()
     {
         this->send_callback_("exit", 4);
+    }
+
+    void RegisterBgJob(const std::string& job_uuid, OnEventCallback&& _on_event_callback)
+    {
+        this->bg_jobs_.insert({job_uuid, std::move(_on_event_callback)});
     }
 
 private:
@@ -613,7 +644,7 @@ private:
         parse_header_ = true;
 
         // call back
-        this->on_event_callback_(this, current_event_);
+        this->HandleEslEvent(current_event_);
         current_event_ = std::make_shared<EslEvent>();
         this->TryLoadEvent();
     }
@@ -784,11 +815,259 @@ private:
         std::shared_ptr<ApiCallbackImpl> api_callback;
     };
 
+    void HandleEslEvent(std::shared_ptr<EslEvent> ev)
+    {
+        auto content_type = ev->headers.find(ESL_EVENT_HEADER_CONTENT_TYPE);
+        if (content_type == ev->headers.end())
+        {
+            Log(LogLevel::Error, "event", "event header not found" ESL_EVENT_HEADER_CONTENT_TYPE);
+            this->on_error_callback_(this, Error::EventError);
+            return;
+        }
+
+        auto str_content_type = content_type->second;
+
+
+        if (str_content_type == ESL_EVENT_CONTENT_TYPE_AUTH)
+        {
+            this->HandleAuth(ev);
+            return;
+        }
+
+        if (str_content_type == ESL_EVENT_CONTENT_TYPE_DISCONNECT)
+        {
+            if (this->disconnect_callback_)
+            {
+                this->disconnect_callback_(this);
+            }
+            return;
+        }
+
+        if (str_content_type == ESL_EVENT_CONTENT_TYPE_COMMAND_REPLY)
+        {
+            this->HandleCommandReply(ev);
+            return;
+        }
+
+        if (str_content_type == ESL_EVENT_CONTENT_TYPE_API_RESPONSE)
+        {
+            this->HandleApi(ev);
+            return;
+        }
+
+        if (str_content_type.compare(0, sizeof(ESL_EVENT_HEADER_CONTENT_TYPE) - 1, ESL_EVENT_HEADER_CONTENT_TYPE))
+        {
+            if (on_event_callback_)
+            {
+                on_event_callback_(this, ev);
+            }
+            return;
+        }
+
+        Log(LogLevel::Error, "event", "unknown content type : %s", str_content_type.c_str());
+    }
+
+    void TryLogin(const std::string& user, const std::string& passwd)
+    {
+        auto login_cb_ok = [] (EslContext* ctx, std::shared_ptr<EslEvent> ev)
+        {
+            auto content_type = ev->headers.find(ESL_EVENT_HEADER_CONTENT_TYPE);
+            if (content_type == ev->headers.end())
+            {
+                ctx->Log(LogLevel::Error, "event", "message header not found" ESL_EVENT_HEADER_CONTENT_TYPE);
+                ctx->on_error_callback_(ctx, Error::EventError);
+                return;
+            }
+
+            if (content_type->second != ESL_EVENT_CONTENT_TYPE_COMMAND_REPLY)
+            {
+                ctx->Log(LogLevel::Error, "event", ("content type error: " + content_type->second).c_str());
+                ctx->on_error_callback_(ctx, Error::EventError);
+                return;
+            }
+
+            auto reply = ev->headers.find("reply-text");
+            if (content_type == ev->headers.end())
+            {
+                ctx->Log(LogLevel::Error, "event", "message header reply-text not found");
+                ctx->on_error_callback_(ctx, Error::EventError);
+                return;
+            }
+            auto reply_text = reply->second;
+            bool logged_in  = false;
+            if (reply_text.compare(0, 3, "+ok"))
+            {
+                // start with +ok
+                logged_in = true;
+            }
+            assert(logged_in == true);
+            if (ctx->on_logged_callback_)
+            {
+                ctx->on_logged_callback_(ctx, logged_in);
+            }
+        };
+        auto login_cb_fail = [] (EslContext* ctx, std::shared_ptr<EslEvent> ev)
+        {
+            auto content_type = ev->headers.find(ESL_EVENT_HEADER_CONTENT_TYPE);
+            if (content_type == ev->headers.end())
+            {
+                ctx->Log(LogLevel::Error, "event", "message header not found" ESL_EVENT_HEADER_CONTENT_TYPE);
+                ctx->on_error_callback_(ctx, Error::EventError);
+                return;
+            }
+
+            if (content_type->second != ESL_EVENT_CONTENT_TYPE_COMMAND_REPLY)
+            {
+                ctx->Log(LogLevel::Error, "event", ("content type error: " + content_type->second).c_str());
+                ctx->on_error_callback_(ctx, Error::EventError);
+                return;
+            }
+
+            auto reply = ev->headers.find("reply-text");
+            if (content_type == ev->headers.end())
+            {
+                ctx->Log(LogLevel::Error, "event", "message header reply-text not found");
+                ctx->on_error_callback_(ctx, Error::EventError);
+                return;
+            }
+            auto reply_text = reply->second;
+            bool logged_in  = false;
+            if (reply_text.compare(0, 3, "+ok"))
+            {
+                // start with +ok
+                logged_in = true;
+            }
+            assert(logged_in == false);
+            if (ctx->on_logged_callback_)
+            {
+                ctx->on_logged_callback_(ctx, logged_in);
+            }
+        };
+
+        if (user.empty())
+        {
+            this->Send("auth " + passwd, Callback::Type::Command).OnSuccess(login_cb_ok).OnFail(login_cb_fail);
+        }
+        else
+        {
+            this->Send("userauth " + user + ":" + passwd, Callback::Type::Command).OnSuccess(login_cb_ok).
+                  OnFail(login_cb_fail);
+        }
+    }
+
+    void HandleAuth(std::shared_ptr<EslEvent> ev)
+    {
+        // try login
+        std::string user, passwd;
+        if (on_logging_callback_)
+        {
+            on_logging_callback_(this, user, passwd);
+        }
+        if (user.empty() || passwd.empty())
+        {
+            Log(LogLevel::Warn, "auth", "user or passwd empty");
+        }
+        TryLogin(user, passwd);
+    }
+
+    void HandleApi(std::shared_ptr<EslEvent> ev)
+    {
+        if (this->current_api_.cmd.empty())
+        {
+            Log(LogLevel::Error, "api", "api not found");
+            return;
+        }
+        if (this->current_api_.api_callback->type_ != Callback::Type::Api)
+        {
+            Log(LogLevel::Error, "api", "callback type is not api");
+            return;
+        }
+
+        auto&& body = ev->body;
+        if (body.compare(0, 4, "-ERR"))
+        {
+            // fail
+            if (this->current_api_.api_callback->on_fail_)
+            {
+                this->current_api_.api_callback->on_fail_(this, ev);
+            }
+        }
+        else
+        {
+            // sucess
+            if (this->current_api_.api_callback->on_ok_)
+            {
+                this->current_api_.api_callback->on_ok_(this, ev);
+            }
+        }
+
+        // take next api
+        if (api_queue_.empty())
+        {
+            this->current_api_ = {};
+        }
+        else
+        {
+            this->current_api_ = api_queue_.front();
+            api_queue_.pop();
+        }
+    }
+
+    void HandleCommandReply(std::shared_ptr<EslEvent> ev)
+    {
+        if (this->current_api_.cmd.empty())
+        {
+            Log(LogLevel::Error, "command", "command not found");
+            return;
+        }
+        if (this->current_api_.api_callback->type_ != Callback::Type::Command)
+        {
+            Log(LogLevel::Error, "command", "callback type is not command");
+            return;
+        }
+
+        auto reply_text = ev->headers.find("reply-text");
+        if (reply_text == ev->headers.end())
+        {
+            Log(LogLevel::Error, "command", "reply-text not found");
+            return;
+        }
+        auto job_uuid = ev->headers.find("job-uuid");
+        bool has_job  = job_uuid != ev->headers.end();
+        bool is_job   = current_api_.api_callback->type_ == Callback::Type::BgApi;
+        if (has_job != is_job)
+        {
+            Log(LogLevel::Error, "command", "has job %d, is job %d", has_job, is_job);
+            return;
+        }
+        if (job_uuid->second.empty())
+        {
+            Log(LogLevel::Error, "command", "job uuid empty");
+            return;
+        }
+
+        if (current_api_.api_callback->on_bg_job_)
+            RegisterBgJob(job_uuid->second, std::move(current_api_.api_callback->on_bg_job_));
+
+        // take next api
+        if (api_queue_.empty())
+        {
+            this->current_api_ = {};
+        }
+        else
+        {
+            this->current_api_ = api_queue_.front();
+            api_queue_.pop();
+        }
+    }
+
     std::queue<ApiInfo> api_queue_;
     ApiInfo             current_api_;
 
     std::shared_ptr<EslEvent> current_event_;
     bool                      parse_header_{true};
+
+    std::unordered_map<std::string, OnEventCallback> bg_jobs_;
 };
 } // namespace eslpp
 
