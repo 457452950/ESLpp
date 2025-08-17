@@ -5,6 +5,22 @@
 
 #include <ESLpp/EslContext.hpp>
 
+static void DumpEslEvent(const eslpp::EslEvent& ev)
+{
+    using namespace std;
+    cout << "============ event start ============\n";
+    for (auto&& it : ev.headers)
+    {
+        cout << "[" << it.first << "]:[" << it.second << "]\n";
+    }
+    cout << endl;
+    if (!ev.body.empty())
+    {
+        cout << "[" << ev.body << "]" << endl;
+    }
+    cout << "============ event end ============\n";
+}
+
 void test_url_decode()
 {
     using namespace std;
@@ -68,7 +84,7 @@ void test_events()
         SubscribeEventHelper param;
         param.Event("all");
         cout << param.GetEslCommand() << endl;
-        assert(param.GetEslCommand() == "event JSON all");
+        assert(param.GetEslCommand() == "event PLAIN all");
     }
     {
         //event plain CHANNEL_CREATE CHANNEL_DESTROY CUSTOM conference::maintenance sofia::register sofia::expire
@@ -92,26 +108,9 @@ void test_parse_event()
 {
     using namespace std;
     using namespace eslpp;
-    auto dump_event_cb = [] (EslContext* ctx, std::shared_ptr<EslEvent> event)
-    {
-        for (auto&& it : event->headers)
-        {
-            printf("\t[%s]:[%s]\n", it.first.c_str(), it.second.c_str());
-        }
-        if (!event->body.empty())
-        {
-            printf("[\n%s\n]\n", event->body.c_str());
-        }
-    };
-    auto log_cb = [] (EslContext*, LogLevel level, const std::string& tag,
-                      const std::string&    message)
-    {
-        printf("[%s]:[%s]\n", tag.c_str(), message.c_str());
-    };
+    EslEventParser event_parser;
 
-    EslContext context;
-    context.SetOnEventCallback(dump_event_cb);
-    context.SetLogHandler(log_cb);
+
     {
         static char data[] = "Speech-Type: detected-speech\n"
                 "Event-Name: DETECTED_SPEECH\n"
@@ -143,7 +142,10 @@ void test_parse_event()
                 "	</interpretation>\n"
                 "</result>";
 
-        context.Feed(reinterpret_cast<const uint8_t*>(data), sizeof(data) - 1);
+        event_parser.Feed(reinterpret_cast<const uint8_t*>(data), sizeof(data) - 1);
+        assert(event_parser.GetError().empty());
+        auto ev = event_parser.NextEvent();
+        DumpEslEvent(*ev);
     }
     {
         static char data[] =
@@ -165,7 +167,10 @@ void test_parse_event()
                 "\n"
                 "+OK 7f4de4bc-17d7-11dd-b7a0-db4edd065621\n";
 
-        context.Feed(reinterpret_cast<const uint8_t*>(data), sizeof(data) - 1);
+        event_parser.Feed(reinterpret_cast<const uint8_t*>(data), sizeof(data) - 1);
+        assert(event_parser.GetError().empty());
+        auto ev = event_parser.NextEvent();
+        DumpEslEvent(*ev);
     }
 }
 
